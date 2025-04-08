@@ -1,31 +1,51 @@
-FROM python:3.10-slim
-
-# 设置工作目录
+# Use Microsoft Playwright image as base
+FROM mcr.microsoft.com/playwright/python:v1.41.0-jammy
+# Set working directory
 WORKDIR /app
-
-# 设置时区为中国时区
 ENV TZ=Asia/Shanghai
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 安装 cron
-RUN apt-get update && apt-get install -y cron && rm -rf /var/lib/apt/lists/*
-ENV PATH="/usr/local/bin:${PATH}"
+# Prevent interactive prompts during package installation (like tzdata asking for region)
+ARG DEBIAN_FRONTEND=noninteractive
 
-# 复制项目文件
-COPY main.py push.py config.py ./
+# Install tzdata package, netcat (for entrypoint wait), curl (for healthcheck)
+# and configure system timezone
+RUN apt-get update && \
+    # Combine installations into one layer
+    apt-get install -y --no-install-recommends \
+      tzdata \
+      netcat \
+      curl && \
+    # Configure the system timezone using the TZ variable
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    # Clean up apt cache to reduce image size
+    rm -rf /var/lib/apt/lists/*
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
 
-# 创建日志目录并设置权限
-RUN mkdir -p /app/logs && chmod 777 /app/logs
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 安装 Python 依赖
-RUN pip install --no-cache-dir \
-    requests>=2.32.3 \
-    urllib3>=2.2.3
+# Copy the rest of the application
+COPY . .
 
-# 创建 cron 任务（每天凌晨1点执行）
-RUN echo "0 1 * * * cd /app && /usr/local/bin/python3 main.py >> /app/logs/\$(date +\%Y-\%m-\%d).log 2>&1" > /etc/cron.d/wxread-cron
-RUN chmod 0644 /etc/cron.d/wxread-cron
-RUN crontab /etc/cron.d/wxread-cron
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=production
+ENV DB_HOST=mysql
 
-# 启动命令
-CMD ["sh", "-c", "service cron start && tail -f /dev/null"]
+# Expose the port the app runs on
+EXPOSE 5000
+
+# Create entrypoint script
+RUN echo '#!/bin/bash' > /app/entrypoint.sh && \
+    echo 'echo "Waiting for MySQL to start..."' >> /app/entrypoint.sh && \
+ echo 'python db_init.py' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo 'echo "Starting application..."' >> /app/entrypoint.sh && \
+    echo 'exec python app.py' >> /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
+# Use entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]

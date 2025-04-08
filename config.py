@@ -1,6 +1,10 @@
 # config.py 自定义配置,包括阅读次数、推送token的填写
 import os
 import re
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 """
 可修改区域
@@ -96,3 +100,39 @@ def convert(curl_command):
 
 
 headers, cookies = convert(curl_str) if curl_str else (headers, cookies)
+
+# Database configuration
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'mysql'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', 'password'),
+    'database': os.getenv('DB_NAME', 'wxread'),
+    'port': int(os.getenv('DB_PORT', 3306))
+}
+
+
+
+# Application configuration
+APP_CONFIG = {
+    'SECRET_KEY': os.getenv('SECRET_KEY', 'your-secret-key-here'),
+    'DEBUG': os.getenv('DEBUG', 'False').lower() == 'true',
+    'HOST': os.getenv('HOST', '0.0.0.0'),
+    'PORT': int(os.getenv('PORT', 5000)),
+    'CORS_ORIGINS': os.getenv('CORS_ORIGINS', '*').split(','),
+    'QRCODE_SESSION_TIMEOUT': int(os.getenv('QRCODE_SESSION_TIMEOUT', 300))  # 5 minutes
+}
+
+# WeChat Reading configuration
+WXREAD_CONFIG = {
+    'BASE_URL': 'https://weread.qq.com',
+    'LOGIN_URL': 'https://weread.qq.com/login',
+    'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+# Selenium configuration
+SELENIUM_CONFIG = {
+    'HEADLESS': os.getenv('SELENIUM_HEADLESS', 'True').lower() == 'true',
+    'BROWSER': os.getenv('SELENIUM_BROWSER', 'chrome'),
+    'DRIVER_PATH': os.getenv('SELENIUM_DRIVER_PATH', ''),
+    'TIMEOUT': int(os.getenv('SELENIUM_TIMEOUT', 30))
+}

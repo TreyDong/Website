@@ -1,3 +1,176 @@
+# WeChat Reading Automation Service
+
+A backend service that allows users to configure and automate tasks related to WeChat Reading (微信读书).
+
+## Features
+
+- Two authentication methods:
+  - Bash request (cURL command) based authentication
+  - QR code scanning based authentication
+- Automated task scheduling
+- Task execution logging
+- Cross-origin resource sharing (CORS) support
+- Docker containerization
+
+## Prerequisites
+
+- Python 3.9+
+- MySQL 5.7+
+- Docker (optional)
+- Chrome/Chromium (for QR code authentication)
+
+## Installation
+
+### Local Installation
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd wxread
+```
+
+2. Create and activate a virtual environment:
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Set up environment variables:
+Create a `.env` file in the project root with the following variables:
+```env
+DB_HOST=localhost
+DB_USER=your_username
+DB_PASSWORD=your_password
+DB_NAME=wxread
+DB_PORT=3306
+SECRET_KEY=your_secret_key
+DEBUG=False
+HOST=0.0.0.0
+PORT=5000
+CORS_ORIGINS=http://localhost:3000,http://your-frontend-domain.com
+QRCODE_SESSION_TIMEOUT=300
+SELENIUM_HEADLESS=True
+SELENIUM_BROWSER=chrome
+SELENIUM_DRIVER_PATH=
+SELENIUM_TIMEOUT=30
+```
+
+5. Initialize the database:
+```bash
+python db_init.py
+```
+
+### Docker Installation
+
+1. Build the Docker image:
+```bash
+docker build -t wxread-service .
+```
+
+2. Run the container:
+```bash
+docker run -d \
+  -p 5000:5000 \
+  -e DB_HOST=your_db_host \
+  -e DB_USER=your_db_user \
+  -e DB_PASSWORD=your_db_password \
+  -e DB_NAME=wxread \
+  -e DB_PORT=3306 \
+  -e SECRET_KEY=your_secret_key \
+  -e CORS_ORIGINS=http://localhost:3000 \
+  --name wxread-service \
+  wxread-service
+```
+
+## API Endpoints
+
+### Configuration
+
+- `POST /api/config/bash`
+  - Configure using bash request (cURL command)
+  - Required fields:
+    - `authorization_code`
+    - `bash_request`
+    - `single_read_time_seconds`
+    - `run_time_config`
+
+- `POST /api/config/qrcode/request`
+  - Request QR code for authentication
+  - Returns:
+    - `session_id`
+    - `qrcode_data`
+    - `expires_at`
+
+- `GET /api/config/qrcode/status/<session_id>`
+  - Check QR code login status
+  - Returns:
+    - `status`
+    - `credentials`
+
+- `POST /api/config/qrcode/submit`
+  - Submit configuration after QR code login
+  - Required fields:
+    - `session_id`
+    - `authorization_code`
+    - `single_read_time_seconds`
+    - `run_time_config`
+
+## Database Schema
+
+### record Table
+- `authorization_code` (VARCHAR, Primary Key)
+- `single_read_time_seconds` (INTEGER)
+- `run_time_config` (VARCHAR)
+- `config_method` (ENUM)
+- `user_info` (JSON)
+- `is_active` (BOOLEAN)
+- `last_validated_at` (TIMESTAMP)
+- `created_at` (TIMESTAMP)
+- `updated_at` (TIMESTAMP)
+- `credentials` (JSON)
+
+### execution_log Table
+- `log_id` (BIGINT, Primary Key)
+- `authorization_code` (VARCHAR, Foreign Key)
+- `start_time` (TIMESTAMP)
+- `end_time` (TIMESTAMP)
+- `status` (ENUM)
+- `details` (TEXT)
+
+### qrcode_sessions Table
+- `session_id` (VARCHAR, Primary Key)
+- `status` (ENUM)
+- `created_at` (TIMESTAMP)
+- `expires_at` (TIMESTAMP)
+- `qrcode_data` (TEXT)
+- `credentials` (JSON)
+
+## Security Considerations
+
+1. Always use HTTPS in production
+2. Keep your database credentials secure
+3. Use strong secret keys
+4. Implement rate limiting for API endpoints
+5. Regularly validate stored credentials
+6. Monitor and log suspicious activities
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
 ## 项目介绍 📚
 
 这个脚本主要是为了在微信读书的阅读**挑战赛中刷时长**和**保持天数**。由于本人偶尔看书时未能及时签到，导致入场费打了水漂。网上找了一些，发现高赞的自动阅读需要挂阅读器模拟或者用ADB模拟，实现一点也不优雅。因此，我决定编写一个自动化脚本。通过对官网接口的抓包和JS逆向分析实现。
@@ -70,7 +243,7 @@ steps4：测试：`docker exec -it wxread python /app/main.py`
 
 1. **签到次数调整**：只需签到完成挑战赛可以将`num`次数从120调整为2，每次`num`为30秒，200即100分钟。
    
-2. **解决阅读时间问题**：对于issue中提出的“阅读时间没有增加”，“增加时间与刷的时间不对等”建议保留`config.py`中的【data】字段，默认阅读三体，其它书籍自行测试。
+2. **解决阅读时间问题**：对于issue中提出的"阅读时间没有增加"，"增加时间与刷的时间不对等"建议保留`config.py`中的【data】字段，默认阅读三体，其它书籍自行测试。
 
 3. **GitHub Action部署/本地部署**：主要配置config.py即可，Action部署使用环境变量，本地部署修改config.py里的阅读次数、headers、cookies即可。
 
