@@ -34,6 +34,8 @@ ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 ENV DB_HOST=mysql
+ENV MYSQL_ROOT_PASSWORD=password
+
 
 # Expose the port the app runs on
 EXPOSE 5000

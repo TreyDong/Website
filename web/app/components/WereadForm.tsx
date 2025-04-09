@@ -31,7 +31,7 @@ export default function WereadForm() {
             setLoginError(null);
             setLoginStatus('正在获取二维码...');
             
-            const response = await fetch('http://localhost:5000/api/config/qrcode', {
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/config/qrcode`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -68,7 +68,7 @@ export default function WereadForm() {
         
         const interval = setInterval(async () => {
             try {
-                const response = await fetch(`http://localhost:5000/api/config/qrcode/status/${sid}`);
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/config/qrcode/status/${sid}`);
                 const data = await response.json();
                 
                 if (data.success) {
@@ -116,7 +116,7 @@ export default function WereadForm() {
     const cancelQRLogin = async () => {
         if (sessionId) {
             try {
-                await fetch(`http://localhost:5000/api/config/qrcode/cancel/${sessionId}`, {
+                await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/config/qrcode/cancel/${sessionId}`, {
                     method: 'POST',
                 });
             } catch (error) {
@@ -181,7 +181,7 @@ export default function WereadForm() {
         setIsLoading(true);
         
         try {
-            const response = await fetch('http://localhost:5000/api/setup', {
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/setup`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

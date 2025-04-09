@@ -26,8 +26,8 @@ export default function TaskList() {
         try {
             setLoading(true);
             const url = authCode 
-                ? `http://localhost:5000/api/tasks?auth_code=${authCode}`
-                : 'http://localhost:5000/api/tasks';
+                ? `${process.env.NEXT_PUBLIC_API_URL}/api/tasks?auth_code=${authCode}`
+                : `${process.env.NEXT_PUBLIC_API_URL}/api/tasks`;
                 
             const response = await fetch(url);
             const data = await response.json();
