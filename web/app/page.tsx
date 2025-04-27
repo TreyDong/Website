@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Navigation from '@/app/components/Navigation';
+import Link from 'next/link';
 
 export default function Page() {
     const [mounted, setMounted] = useState(false);
@@ -144,23 +145,23 @@ export default function Page() {
                         </span>
                     </div>
                     <div className="flex space-x-8 text-sm text-gray-500" data-oid="sg_m8vt">
-                        <a
+                        <Link
                             href="/notion"
                             className="hover:text-black transition-colors"
                             data-oid="78:hdpk"
                         >
                             Notion
-                        </a>
-                        <a
+                        </Link>
+                        <Link
                             href="/weread"
                             className="hover:text-black transition-colors"
                             data-oid=":iwo280"
                         >
-                            微信读书自动签到
-                        </a>
+                            微信读书
+                        </Link>
                     </div>
                     <div className="mt-6 md:mt-0 text-sm text-gray-400" data-oid="ut8j1l9">
-                        © 2023 Trey. 保留所有权利。
+                        © 2025 Trey. 保留所有权利。
                     </div>
                 </div>
             </footer>

@@ -34,8 +34,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": APP_CONFIG['CORS_ORIGINS']}})
+# --- 配置允许的来源 ---
+# 尝试从环境变量获取，否则使用默认列表（例如开发环境）
+# 在生产环境中，你应该通过环境变量设置你的前端域名
+allowed_origins_str = os.environ.get(
+    'ALLOWED_ORIGINS',
+    '*' # 你的 Next.js 开发服务器地址(或其他端口)
+)
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(',')]
 
+print(f"允许的 CORS 来源: {allowed_origins}") # 打印出来确认
+
+CORS(app,
+     # resources 指定应用CORS策略的路径，r"/*" 表示所有路径
+     resources={r"/*": {"origins": allowed_origins}}, # 重点：明确指定允许的来源列表
+     supports_credentials=True,                          # 必须为 True，因为前端发送了 credentials
+     # 确保 'Content-Type' 和任何你需要的自定义头都在这里
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # 确保包含 POST 和 OPTIONS
+     max_age=3600)
+
+print(f"--- Flask CORS 配置 ---")
+print(f"允许的来源 (allowed_origins): {allowed_origins}")
+print(f"支持凭证 (supports_credentials): True") # 应为 True
+print(f"-----------------------")
 # Initialize scheduler
 scheduler = BackgroundScheduler(
     job_defaults={
@@ -217,24 +239,20 @@ def config_bash():
 
 import threading
 
-# 添加一个全局字典来存储会话状态
-session_states = {}
-
-
 def qrcode_login_worker(session_id):
     """后台线程处理二维码登录流程"""
     logger.info(f"Starting QR code login worker for session: {session_id}")
     
     try:
-        # 初始化会话状态
-        session_states[session_id] = {
-            'status': 'initializing',
-            'qrcode': None,
-            'error': None,
-            'headers': None,
-            'cookies': None,
-            'success': False
-        }
+        # 初始化数据库中的会话状态
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute("""
+            UPDATE qrcode_sessions 
+            SET status = 'pending'
+            WHERE session_id = %s
+        """, (session_id,))
+        connection.commit()
         
         # 使用 Playwright 获取登录信息
         playwright, browser = setup_browser()
@@ -254,7 +272,7 @@ def qrcode_login_worker(session_id):
             # 设置请求拦截
             def handle_request(route, request):
                 # 记录所有请求的URL
-                logger.info(f"Request URL: {request.url}")
+                # logger.info(f"Request URL: {request.url}")
                 
                 # 只拦截特定API请求
                 if "https://weread.qq.com/web/book/read" == request.url:
@@ -319,34 +337,32 @@ def qrcode_login_worker(session_id):
                 
                 # 等待二维码出现
                 logger.info("Waiting for QR code to appear")
-                qr_code_base64 = ''
                 try:
-                    qr_code_selector = page.wait_for_selector('img[alt="扫码登录"]', timeout=30000)
+                    qr_code_selector = page.wait_for_selector('img[alt="扫码登录"]', timeout=60000)
                     logger.info("QR code appeared")
-                        # 获取二维码图片
+                    # 获取二维码图片
                     logger.info("Capturing QR code image")
                     qr_code_base64 = qr_code_selector.get_attribute('src')
                 except Exception as e:
                     logger.error(f"QR code did not appear: {str(e)}")
-                    session_states[session_id]['status'] = 'error'
-                    session_states[session_id]['error'] = '二维码未出现'
+                    # 更新数据库状态为错误
+                    cursor.execute("""
+                        UPDATE qrcode_sessions 
+                        SET status = 'expired',
+                            credentials = %s
+                        WHERE session_id = %s
+                    """, (json.dumps({'error': '二维码未出现'}), session_id))
+                    connection.commit()
                     return
 
-                # 更新会话状态
-                session_states[session_id]['status'] = 'waiting_for_scan'
-                session_states[session_id]['qrcode'] = qr_code_base64
-                
                 # 更新数据库中的二维码
-                connection = get_db_connection()
-                cursor = connection.cursor()
                 cursor.execute("""
                     UPDATE qrcode_sessions 
-                    SET qrcode_data = %s
+                    SET status = 'pending',
+                        qrcode_data = %s
                     WHERE session_id = %s
                 """, (qr_code_base64, session_id))
                 connection.commit()
-                cursor.close()
-                connection.close()
                 
                 logger.info("QR code saved to database, waiting for user to scan")
                 time.sleep(2)
@@ -357,13 +373,23 @@ def qrcode_login_worker(session_id):
                 success_count = 0
                 for attempt in range(max_attempts):
                     # 检查会话是否已取消
-                    if session_states[session_id]['status'] == 'cancelled':
+                    cursor.execute("SELECT status FROM qrcode_sessions WHERE session_id = %s", (session_id,))
+                    session_status = cursor.fetchone()['status']
+                    if session_status == 'expired':
                         logger.info(f"Session {session_id} was cancelled")
                         return
+                        
                     avatar = page.wait_for_selector('.readerTopBar_avatar',state='visible',timeout=30000)
                     if avatar:
                         logger.info("User logged in successfully")
-                        session_states[session_id]['status'] = 'logged_in'
+                        # 更新数据库状态为已登录
+                        cursor.execute("""
+                            UPDATE qrcode_sessions 
+                            SET status = 'scanned'
+                            WHERE session_id = %s
+                        """, (session_id,))
+                        connection.commit()
+                        
                         page.goto("https://weread.qq.com/web/reader/ce032b305a9bc1ce0b0dd2akc9e32940268c9e1074f5bc6")
                         success_count += 1
                         logger.info(f"当前页面内容：{page.content()}")
@@ -372,19 +398,20 @@ def qrcode_login_worker(session_id):
                     else:
                         time.sleep(1)
                         logger.info(f"Waiting for user to scan QR code... (Attempt {attempt+1}/{max_attempts})")
+                        
                 if success_count > 0:
                     # 检查是否成功拦截到请求并且响应成功
                     if not intercepted_request['headers'] or not intercepted_request['cookies']:
                         logger.error("Failed to intercept request headers or cookies")
-                        session_states[session_id]['status'] = 'error'
-                        session_states[session_id]['error'] = '未能获取到请求信息，请重试'
+                        # 更新数据库状态为错误
+                        cursor.execute("""
+                            UPDATE qrcode_sessions 
+                            SET status = 'expired',
+                                credentials = %s
+                            WHERE session_id = %s
+                        """, (json.dumps({'error': '未能获取到请求信息，请重试'}), session_id))
+                        connection.commit()
                         return
-
-                    # if not intercepted_request['success']:
-                    #     logger.error("API request did not return success status")
-                    #     session_states[session_id]['status'] = 'error'
-                    #     session_states[session_id]['error'] = 'API请求未返回成功状态，请重试'
-                    #     return
 
                     # 获取拦截到的请求头和cookie
                     logger.info("Successfully intercepted request headers and cookies")
@@ -395,32 +422,32 @@ def qrcode_login_worker(session_id):
                     headers_str = json.dumps(headers)
                     cookies_str = headers.get('cookie','')
 
-                    # 更新会话状态
-                    session_states[session_id]['status'] = 'completed'
-                    session_states[session_id]['headers'] = headers_str
-                    session_states[session_id]['cookies'] = cookies_str
-                    session_states[session_id]['success'] = True
-
                     # 更新数据库中的会话状态
-                    connection = get_db_connection()
-                    cursor = connection.cursor()
                     cursor.execute("""
                         UPDATE qrcode_sessions 
                         SET status = 'confirmed',
                             credentials = %s
                         WHERE session_id = %s
-                    """, (json.dumps({'headers': headers_str, 'cookies': cookies_str}), session_id))
+                    """, (json.dumps({
+                        'headers': headers_str,
+                        'cookies': cookies_str,
+                        'success': True
+                    }), session_id))
                     connection.commit()
-                    cursor.close()
-                    connection.close()
 
                     logger.info("QR code login process completed successfully")
                     return
                 else:
                     # 如果没有检测到登录状态
                     logger.warning("Login status not detected after maximum attempts")
-                    session_states[session_id]['status'] = 'timeout'
-                    session_states[session_id]['error'] = '登录超时，请重试'
+                    # 更新数据库状态为超时
+                    cursor.execute("""
+                        UPDATE qrcode_sessions 
+                        SET status = 'expired',
+                            credentials = %s
+                        WHERE session_id = %s
+                    """, (json.dumps({'error': '登录超时，请重试'}), session_id))
+                    connection.commit()
             
         finally:
             logger.info("Closing browser context, browser, and playwright")
@@ -433,8 +460,16 @@ def qrcode_login_worker(session_id):
             
     except Exception as e:
         logger.error(f"QR code login worker failed: {str(e)}", exc_info=True)
-        session_states[session_id]['status'] = 'error'
-        session_states[session_id]['error'] = str(e)
+        # 更新数据库状态为错误
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute("""
+            UPDATE qrcode_sessions 
+            SET status = 'expired',
+                credentials = %s
+            WHERE session_id = %s
+        """, (json.dumps({'error': str(e)}), session_id))
+        connection.commit()
 
 @app.route('/api/config/qrcode', methods=['POST'])
 def generate_qrcode():
@@ -449,22 +484,11 @@ def generate_qrcode():
         connection = get_db_connection()
         cursor = connection.cursor()
         
-        # 创建会话表（如果不存在）
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS qrcode_sessions (
-                session_id VARCHAR(36) PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,
-                status VARCHAR(20) DEFAULT 'pending',
-                credentials JSON
-            )
-        """)
-        
         # 插入会话记录
         expires_at = datetime.now() + timedelta(seconds=APP_CONFIG['QRCODE_SESSION_TIMEOUT'])
         cursor.execute("""
-            INSERT INTO qrcode_sessions (session_id, expires_at)
-            VALUES (%s, %s)
+            INSERT INTO qrcode_sessions (session_id, expires_at, status)
+            VALUES (%s, %s, 'pending')
         """, (session_id, expires_at))
         
         connection.commit()
@@ -475,24 +499,12 @@ def generate_qrcode():
         thread.daemon = True
         thread.start()
         
-        # 等待二维码生成
-        max_wait = 30  # 最多等待30秒
-        for _ in range(max_wait):
-            if session_id in session_states and session_states[session_id]['qrcode']:
-                break
-            time.sleep(1)
-        
-        # 检查是否成功生成二维码
-        if session_id not in session_states or not session_states[session_id]['qrcode']:
-            logger.error("Failed to generate QR code")
-            return jsonify({'success': False, 'error': '生成二维码失败，请重试'}), 500
-        
-        # 返回二维码和会话ID
+        # 立即返回会话ID，让前端轮询状态
         return jsonify({
             'success': True,
             'session_id': session_id,
-            'qrcode': session_states[session_id]['qrcode'],
-            'expires_at': expires_at.isoformat()
+            'expires_at': expires_at.isoformat(),
+            'message': '正在生成二维码，请稍后查询状态'
         })
         
     except Exception as e:
@@ -503,59 +515,52 @@ def generate_qrcode():
 def check_qrcode_status(session_id):
     """Check QR code login status"""
     try:
-        # 检查会话是否存在
-        if session_id not in session_states:
+        # 从数据库获取会话状态
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute("""
+            SELECT status, qrcode_data, credentials 
+            FROM qrcode_sessions 
+            WHERE session_id = %s
+        """, (session_id,))
+        session = cursor.fetchone()
+        
+        if not session:
             logger.error(f"Session not found: {session_id}")
             return jsonify({'success': False, 'error': '会话不存在或已过期'}), 404
         
         # 获取会话状态
-        session_state = session_states[session_id]
-        status = session_state['status']
+        status = session['status']
+        credentials = json.loads(session['credentials']) if session['credentials'] else {}
         
         # 根据状态返回不同的响应
-        if status == 'initializing':
+        if status == 'pending':
             return jsonify({
                 'success': True,
-                'status': 'initializing',
-                'message': '正在初始化...'
+                'status': 'pending',
+                'message': '等待扫描二维码...',
+                'qrcode': session['qrcode_data']
             })
-        elif status == 'waiting_for_scan':
+        elif status == 'scanned':
             return jsonify({
                 'success': True,
-                'status': 'waiting_for_scan',
-                'message': '等待扫描二维码...'
-            })
-        elif status == 'logged_in':
-            return jsonify({
-                'success': True,
-                'status': 'logged_in',
+                'status': 'scanned',
                 'message': '已登录，正在获取凭证...'
             })
-        elif status == 'completed':
+        elif status == 'confirmed':
             return jsonify({
                 'success': True,
                 'status': 'completed',
                 'message': '登录完成',
-                'headers': session_state['headers'],
-                'cookies': session_state['cookies']
+                'headers': credentials.get('headers'),
+                'cookies': credentials.get('cookies')
             })
-        elif status == 'error':
+        elif status == 'expired':
+            error_message = credentials.get('error', '登录超时，请重试')
             return jsonify({
                 'success': False,
-                'status': 'error',
-                'error': session_state['error']
-            })
-        elif status == 'timeout':
-            return jsonify({
-                'success': False,
-                'status': 'timeout',
-                'error': '登录超时，请重试'
-            })
-        elif status == 'cancelled':
-            return jsonify({
-                'success': False,
-                'status': 'cancelled',
-                'error': '会话已取消'
+                'status': 'expired',
+                'error': error_message
             })
         else:
             return jsonify({
@@ -573,21 +578,25 @@ def cancel_qrcode_session(session_id):
     """Cancel QR code session"""
     try:
         # 检查会话是否存在
-        if session_id not in session_states:
-            logger.error(f"Session not found: {session_id}")
-            return jsonify({'success': False, 'error': '会话不存在或已过期'}), 404
-        
-        # 更新会话状态为已取消
-        session_states[session_id]['status'] = 'cancelled'
-        
-        # 更新数据库中的会话状态
         connection = get_db_connection()
         cursor = connection.cursor()
         cursor.execute("""
-            UPDATE qrcode_sessions 
-            SET status = 'cancelled'
+            SELECT status FROM qrcode_sessions 
             WHERE session_id = %s
         """, (session_id,))
+        session = cursor.fetchone()
+        
+        if not session:
+            logger.error(f"Session not found: {session_id}")
+            return jsonify({'success': False, 'error': '会话不存在或已过期'}), 404
+        
+        # 更新会话状态为已过期
+        cursor.execute("""
+            UPDATE qrcode_sessions 
+            SET status = 'expired',
+                credentials = %s
+            WHERE session_id = %s
+        """, (json.dumps({'error': '会话已取消'}), session_id))
         connection.commit()
         
         return jsonify({
@@ -1067,9 +1076,188 @@ def get_scheduled_tasks():
         logger.error(f"Error getting scheduled tasks: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/health')
+def health_check():
+    """健康检查端点"""
+    try:
+        # 检查数据库连接
+        connection = get_db_connection()
+        connection.close()
+        return jsonify({'status': 'healthy'}), 200
+    except Exception as e:
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
+
+@app.route('/api/remove-watermark', methods=['POST'])
+def remove_watermark():
+    """Handle watermark removal request"""
+    try:
+        data = request.json
+        url = data.get('url')
+        
+        if not url:
+            return jsonify({'success': False, 'error': 'URL is required'}), 400
+            
+        # Default parameters
+        params = {
+            "url": url,
+            "videoQuality": "max",
+            "audioFormat": "best",
+            "audioBitrate": "128",
+            "filenameStyle": "classic",
+            "downloadMode": "auto",
+            "youtubeVideoCodec": "h264",
+            "youtubeDubLang": "en",
+            "alwaysProxy": False,
+            "disableMetadata": False,
+            "tiktokFullAudio": False,
+            "tiktokH265": False,
+            "twitterGif": True,
+            "youtubeHLS": False
+        }
+        
+        # Call cobalt-api service
+        try:
+            response = requests.post(
+                'http://cobalt-api:9000/',
+                data= json.dumps(params),
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+            )
+            
+            if response.status_code == 200:
+                return jsonify({
+                    'success': True,
+                    'data': response.json()
+                })
+            else:
+                logger.error(f"Cobalt API error: {response.status_code} - {response.text}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Cobalt API error: {response.status_code}'
+                }), response.status_code
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error calling cobalt-api: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': f'Error connecting to cobalt-api: {str(e)}'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error in remove watermark: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/check-order', methods=['POST'])
+def check_order():
+    try:
+        data = request.get_json()
+        order_id = data.get('orderId')
+        
+        # Connect to the database
+        connection = pymysql.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database'],
+            charset='utf8mb4'
+        )
+        
+        try:
+            with connection.cursor() as cursor:
+                # Check if the order exists in the record table
+                cursor.execute(
+                    'SELECT * FROM record WHERE authorization_code = %s',
+                    (order_id,)
+                )
+                rows = cursor.fetchall()
+                
+                if not rows:
+                    return jsonify({'exists': False})
+                
+                # Check if the order is configured (has credentials)
+                record = rows[0]
+                is_configured = record.get('credentials') and len(record['credentials']) > 0
+                
+                return jsonify({
+                    'exists': True,
+                    'isConfigured': is_configured
+                })
+        finally:
+            connection.close()
+            
+    except Exception as e:
+        logger.error(f"Error checking order: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/start-registration', methods=['POST'])
+def start_registration():
+    try:
+        data = request.get_json()
+        order_id = data.get('orderId')
+        phone_number = data.get('phoneNumber')
+        
+        # Start the registration process
+        # This will be handled by the existing Feishu registration code
+        # For now, we'll just return success
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Error starting registration: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/complete-registration', methods=['POST'])
+def complete_registration():
+    try:
+        data = request.get_json()
+        order_id = data.get('orderId')
+        verification_code = data.get('verificationCode')
+        
+        # Connect to the database
+        connection = pymysql.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database'],
+            charset='utf8mb4'
+        )
+        
+        try:
+            with connection.cursor() as cursor:
+                # Get the template URL and auth token from the registration process
+                # This should be populated by the Feishu registration code
+                template_url = "https://example.com/template"  # Replace with actual URL
+                auth_token = "example_token"  # Replace with actual token
+                
+                # Save the credentials to the record table
+                cursor.execute(
+                    'UPDATE record SET credentials = %s WHERE authorization_code = %s',
+                    (json.dumps({'templateUrl': template_url, 'authToken': auth_token}), order_id)
+                )
+                
+                # Save the auth token to a file
+                token_file_path = os.path.join(os.path.dirname(__file__), f'{order_id}_auth_token.txt')
+                with open(token_file_path, 'w') as f:
+                    f.write(auth_token)
+                
+                connection.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'templateUrl': template_url,
+                    'authToken': auth_token
+                })
+        finally:
+            connection.close()
+            
+    except Exception as e:
+        logger.error(f"Error completing registration: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
 if __name__ == '__main__':
     # 加载定时任务
     load_scheduled_tasks()
-    
+
     # 启动Flask应用
     app.run(host='0.0.0.0', port=5000)

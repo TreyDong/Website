@@ -16,7 +16,7 @@ COPY . .
 
 # 设置生产环境
 ENV NODE_ENV=production
-ENV PORT=3001
+ENV PORT=3005
 ENV HOSTNAME=0.0.0.0
 
 # 构建应用
@@ -24,7 +24,7 @@ ENV HOSTNAME=0.0.0.0
 RUN ./node_modules/.bin/next build
 
 # 暴露 3001 端口
-EXPOSE 3001
+EXPOSE 3005
 
 # Copy static assets to the expected locations within the standalone directory
 RUN cp -R .next/static /app/.next/standalone/.next/static

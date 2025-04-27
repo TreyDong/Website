@@ -1,3 +1,6 @@
+networks:
+    1panel-network:
+        external: true
 services:
   # MySQL 数据库服务
   mysql:
@@ -15,7 +18,7 @@ services:
     ports:
       - "3306:3306"
     networks:
-      - app-network
+      - 1panel-network
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -32,6 +35,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    env_file:
+      - ./wxread/.env
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -42,7 +47,7 @@ services:
     ports:
       - "5000:5000"
     networks:
-      - app-network
+      - 1panel-network
 
   # 前端Web服务
   frontend:
@@ -51,20 +56,17 @@ services:
       dockerfile: Dockerfile
     container_name: wxread-website
     restart: always
+    env_file:
+      - .env
     ports:
-      - "3000:3000"
-      - "3001:3001"
+      - "3005:3005"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:5000
+      - NODE_ENV=production
       - TZ=Asia/Shanghai
     depends_on:
       - backend
     networks:
-      - app-network
-
-networks:
-  app-network:
-    driver: bridge
+      - 1panel-network
 
 volumes:
   mysql_data:

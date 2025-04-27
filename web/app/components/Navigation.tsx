@@ -3,9 +3,11 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { authService } from '@/app/services/authService';
+import { usePathname } from 'next/navigation';
 
 export default function Navigation() {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const pathname = usePathname();
 
     // 检查用户登录状态
     useEffect(() => {
@@ -23,16 +25,44 @@ export default function Navigation() {
             {/* 将菜单项放在中间，占据大部分空间 */}
             <div className="hidden md:flex space-x-8 text-sm flex-grow">
                 <Link
+                    href="/"
+                    className={`hover:text-black text-gray-500 transition-colors ${
+                        pathname === '/'
+                            ? 'border-b-2 border-indigo-500'
+                            : ''
+                    }`}
+                >
+                    首页
+                </Link>
+                <Link
+                    href="/feishu"
+                    className={`hover:text-black text-gray-500 transition-colors ${
+                        pathname === '/feishu'
+                            ? 'border-b-2 border-indigo-500'
+                            : ''
+                    }`}
+                >
+                    飞书配置
+                </Link>
+                <Link
                     href="/notion"
-                    className="hover:text-black text-gray-500 transition-colors"
+                    className={`hover:text-black text-gray-500 transition-colors ${
+                        pathname === '/notion'
+                            ? 'border-b-2 border-indigo-500'
+                            : ''
+                    }`}
                 >
                     Notion
                 </Link>
                 <Link
                     href="/weread"
-                    className="hover:text-black text-gray-500 transition-colors"
+                    className={`hover:text-black text-gray-500 transition-colors ${
+                        pathname === '/weread'
+                            ? 'border-b-2 border-indigo-500'
+                            : ''
+                    }`}
                 >
-                    微信读书自动签到
+                    微信读书
                 </Link>
             </div>
             

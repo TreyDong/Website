@@ -4,6 +4,14 @@ import React, { useState, useEffect } from 'react';
 import { Button } from 'antd';
 import { message } from 'antd';
 
+// 添加调试信息
+console.log('Environment variables:', {
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+  NODE_ENV: process.env.NODE_ENV
+});
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
+
 export default function WereadForm() {
     const [mode, setMode] = useState<'qr' | 'manual'>('qr');
     const [formData, setFormData] = useState({
@@ -17,21 +25,25 @@ export default function WereadForm() {
     const [isLoading, setIsLoading] = useState(false);
     const [qrCode, setQrCode] = useState<string | null>(null);
     const [sessionId, setSessionId] = useState<string | null>(null);
-    const [showQRCode, setShowQRCode] = useState(false);
-    const [isConfirming, setIsConfirming] = useState(false);
     const [isQrCodeLoading, setIsQrCodeLoading] = useState(false);
     const [isPolling, setIsPolling] = useState(false);
     const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
     const [loginStatus, setLoginStatus] = useState<string>('');
     const [loginError, setLoginError] = useState<string | null>(null);
-
+    const delay = (ms: number) =>
+        new Promise(res => setTimeout(res, ms));
     const startQRLogin = async () => {
         try {
             setIsQrCodeLoading(true);
             setLoginError(null);
             setLoginStatus('正在获取二维码...');
             
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/config/qrcode`, {
+            if (!API_BASE_URL) {
+                setLoginError('API URL 未配置');
+                return;
+            }
+            
+            const response = await fetch(`${API_BASE_URL}/api/config/qrcode`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -41,10 +53,8 @@ export default function WereadForm() {
             const data = await response.json();
             
             if (data.success) {
-                setQrCode(data.qrcode);
                 setSessionId(data.session_id);
-                setLoginStatus('请扫描二维码登录');
-                
+                setLoginStatus(data.message || '正在生成二维码...');
                 startPollingLoginStatus(data.session_id);
             } else {
                 setLoginError(data.error || '获取二维码失败');
@@ -68,11 +78,15 @@ export default function WereadForm() {
         
         const interval = setInterval(async () => {
             try {
-                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/config/qrcode/status/${sid}`);
+                const response = await fetch(`${API_BASE_URL}/api/config/qrcode/status/${sid}`);
                 const data = await response.json();
                 
                 if (data.success) {
                     setLoginStatus(data.message || '');
+                    
+                    if (data.qrcode) {
+                        setQrCode(data.qrcode);
+                    }
                     
                     if (data.status === 'completed') {
                         setFormData(prev => ({
@@ -86,7 +100,7 @@ export default function WereadForm() {
                         setIsPolling(false);
                         
                         message.success('登录成功！');
-                    } else if (data.status === 'error' || data.status === 'timeout' || data.status === 'cancelled') {
+                    } else if (data.status === 'expired') {
                         clearInterval(interval);
                         setPollingInterval(null);
                         setIsPolling(false);
@@ -116,7 +130,7 @@ export default function WereadForm() {
     const cancelQRLogin = async () => {
         if (sessionId) {
             try {
-                await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/config/qrcode/cancel/${sessionId}`, {
+                await fetch(`${API_BASE_URL}/api/config/qrcode/cancel/${sessionId}`, {
                     method: 'POST',
                 });
             } catch (error) {
@@ -181,7 +195,7 @@ export default function WereadForm() {
         setIsLoading(true);
         
         try {
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/setup`, {
+            const response = await fetch(`${API_BASE_URL}/api/setup`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
